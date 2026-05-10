@@ -623,7 +623,7 @@
           <h2>📊 ภาพรวมกลุ่มบริหารงานบุคคล</h2>
           <p>ข้อมูล ณ วันที่ <span id="todayDate"></span></p>
         </div>
-        <button class="admin-add-btn" onclick="openStaffModal()">✏️ แก้ไขจำนวนบุคลากร</button>
+        <!-- แก้ไขข้อมูลบุคลากรได้ที่ Google Sheets → Sheet: Dashboard -->
       </div>
 
       <!-- STAFF STAT CARDS -->
@@ -977,73 +977,46 @@ async function sha256(message) {
 }
 
 // ============================================================
-//  STAFF DATA
+//  STAFF DATA — ดึงจาก Google Sheets Sheet: Dashboard
+//  โครงสร้าง Sheet: key | label | icon | color | value | sub
+//  ตัวอย่างแถว:  admin | ฝ่ายบริหาร | 👑 | blue | 4 | คน
 // ============================================================
-const STAFF_DEFAULTS = { admin: 4, teacher: 28, gov: 5, contract: 3, support: 6 };
-const STAFF_META = [
-  { key: 'admin',    label: 'ฝ่ายบริหาร',                  icon: '👑', color: 'blue'  },
-  { key: 'teacher',  label: 'ครูและครูผู้ช่วย',             icon: '🎓', color: 'green' },
-  { key: 'gov',      label: 'พนักงานราชการ',                icon: '📋', color: 'amber' },
-  { key: 'contract', label: 'ครูอัตราจ้าง',                 icon: '📝', color: 'red'   },
-  { key: 'support',  label: 'เจ้าหน้าที่และพนักงานบริการ', icon: '🛠️', color: ''      },
-];
-
-function loadStaff() {
-  const saved = localStorage.getItem('hr_staff');
-  if (saved) { try { return JSON.parse(saved); } catch(e) {} }
-  return { ...STAFF_DEFAULTS };
-}
-function saveStaffData(obj) { localStorage.setItem('hr_staff', JSON.stringify(obj)); }
+let staffData = []; // เก็บข้อมูลที่ดึงจาก Sheets
 
 function renderStaffCards() {
-  const staff = loadStaff();
-  const total = Object.values(staff).reduce((a, b) => a + b, 0);
-  const grid  = document.getElementById('staffStatGrid');
+  const grid = document.getElementById('staffStatGrid');
+  if (!staffData.length) {
+    grid.innerHTML = '<div class="stat-card" style="grid-column:1/-1;color:var(--muted);font-size:0.85rem;text-align:center;">ไม่พบข้อมูลใน Sheet: Dashboard</div>';
+    return;
+  }
 
-  // การ์ดรวมทั้งหมด
+  // คำนวณยอดรวมจากแถวที่ไม่ใช่ total
+  const rows = staffData.filter(r => r.key !== 'total');
+  const total = rows.reduce((s, r) => s + (parseInt(r.value) || 0), 0);
+
+  // การ์ดรวมทั้งหมด (คำนวณอัตโนมัติ)
   let html = `<div class="stat-card" style="border-left-color:#1a56a0;">
     <span class="stat-label"><span class="stat-icon">👥</span>บุคลากรทั้งหมด</span>
     <span class="stat-value">${total}</span>
     <span class="stat-sub">รวมทุกประเภท</span>
   </div>`;
 
-  STAFF_META.forEach(m => {
-    const colorClass = m.color ? m.color : '';
-    html += `<div class="stat-card ${colorClass}">
-      <span class="stat-label"><span class="stat-icon">${m.icon}</span>${m.label}</span>
-      <span class="stat-value">${staff[m.key] || 0}</span>
-      <span class="stat-sub">คน</span>
+  // การ์ดรายประเภทจาก Sheets
+  rows.forEach(r => {
+    const colorMap = { blue:'', green:'green', amber:'amber', red:'red', purple:'', teal:'' };
+    const cls = colorMap[r.color] || '';
+    const borderColor = { blue:'#1a56a0', green:'#16a34a', amber:'#f59e0b', red:'#dc2626', purple:'#9333ea', teal:'#0891b2' }[r.color] || '#1a56a0';
+    html += `<div class="stat-card ${cls}" style="${cls ? '' : 'border-left-color:' + borderColor}">
+      <span class="stat-label"><span class="stat-icon">${r.icon || ''}</span>${r.label || ''}</span>
+      <span class="stat-value">${r.value || 0}</span>
+      <span class="stat-sub">${r.sub || 'คน'}</span>
     </div>`;
   });
   grid.innerHTML = html;
 }
 
-function openStaffModal() {
-  const staff = loadStaff();
-  document.getElementById('sf_admin').value    = staff.admin    || 0;
-  document.getElementById('sf_teacher').value  = staff.teacher  || 0;
-  document.getElementById('sf_gov').value      = staff.gov      || 0;
-  document.getElementById('sf_contract').value = staff.contract || 0;
-  document.getElementById('sf_support').value  = staff.support  || 0;
-  document.getElementById('staffModal').classList.add('open');
-}
 
-function saveStaff() {
-  const obj = {
-    admin:    parseInt(document.getElementById('sf_admin').value)    || 0,
-    teacher:  parseInt(document.getElementById('sf_teacher').value)  || 0,
-    gov:      parseInt(document.getElementById('sf_gov').value)      || 0,
-    contract: parseInt(document.getElementById('sf_contract').value) || 0,
-    support:  parseInt(document.getElementById('sf_support').value)  || 0,
-  };
-  saveStaffData(obj);
-  renderStaffCards();
-  closeModal('staffModal');
-  showToast('✅ บันทึกข้อมูลบุคลากรแล้ว');
-}
-
-
-const SHEETS = { subsystems: 'Subsystems', announces: 'Announces', events: 'Events', contacts: 'Contacts' };
+const SHEETS = { subsystems: 'Subsystems', announces: 'Announces', events: 'Events', contacts: 'Contacts', dashboard: 'Dashboard' };
 let data = { subsystems: [], announces: [], events: [], contacts: [] };
 
 async function fetchSheet(sheetName) {
@@ -1081,12 +1054,14 @@ window.onload = async function() {
   showGlobalLoading(true);
   let sheetsOk = false;
   try {
-    const [ss, an, ev, ct] = await Promise.all([
+    const [ss, an, ev, ct, dash] = await Promise.all([
       fetchSheet(SHEETS.subsystems), fetchSheet(SHEETS.announces),
       fetchSheet(SHEETS.events),     fetchSheet(SHEETS.contacts),
+      fetchSheet(SHEETS.dashboard),
     ]);
-    if (ss.length || an.length || ev.length || ct.length) {
+    if (ss.length || an.length || ev.length || ct.length || dash.length) {
       data = { subsystems: ss, announces: an, events: ev, contacts: ct };
+      if (dash.length) staffData = dash;
       sheetsOk = true;
       showDataSource('sheets');
     }
@@ -1096,6 +1071,14 @@ window.onload = async function() {
     const local = loadLocal();
     if (local) { data = local; showDataSource('local'); }
     else        { data = getDefaultData(); showDataSource('default'); }
+    // fallback staff data
+    staffData = [
+      { key:'admin',    label:'ฝ่ายบริหาร',                  icon:'👑', color:'blue',  value:'4',  sub:'คน' },
+      { key:'teacher',  label:'ครูและครูผู้ช่วย',             icon:'🎓', color:'green', value:'28', sub:'คน' },
+      { key:'gov',      label:'พนักงานราชการ',                icon:'📋', color:'amber', value:'5',  sub:'คน' },
+      { key:'contract', label:'ครูอัตราจ้าง',                 icon:'📝', color:'red',   value:'3',  sub:'คน' },
+      { key:'support',  label:'เจ้าหน้าที่และพนักงานบริการ', icon:'🛠️', color:'',      value:'6',  sub:'คน' },
+    ];
   }
 
   showGlobalLoading(false);
